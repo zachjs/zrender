@@ -143,7 +143,14 @@ define(function (require) {
          * usefull for large data.
          * @type {number}
          */
-        progressive: -1,
+        progressiveFrame: -1,
+
+        /**
+         * For fetching current progressive number, must be set
+         * when progressiveFrame >= 0.
+         * @type {string}
+         */
+        progressiveKey: null,
 
         beforeBrush: function (ctx) {},
 

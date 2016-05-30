@@ -135,6 +135,15 @@ define(function(require) {
                     if (self._needsRefresh) {
                         self.refreshImmediately();
                     }
+                    // TBD_PROGRESSIVE
+                    // (a) refreshImmediately and onProgressive should not execute in one
+                    // frame, otherwise the first onProgressive will always execute without
+                    // any delay, which might matter when user interacts (like drag).
+                    // (b) onProgressive should after refreshImmediately to avoid effect
+                    // normal render.
+                    else {
+                        self.onProgressive && self.onProgressive();
+                    }
                 }
             }
         });
@@ -210,23 +219,32 @@ define(function(require) {
 
         /**
          * Repaint the canvas immediately
+         * @param {Object|boolean} [opts]
+         * @param {Object} [opts.progressive]
          */
-        refreshImmediately: function () {
+        refreshImmediately: function (opts) {
             // Clear needsRefresh ahead to avoid something wrong happens in refresh
             // Or it will cause zrender refreshes again and again.
             this._needsRefresh = false;
-            this.painter.refresh();
-            /**
-             * Avoid trigger zr.refresh in Element#beforeUpdate hook
-             */
+            this.painter.refresh(opts);
+            // Avoid trigger zr.refresh in Element#beforeUpdate hook.
+            // And if refreshImmediately is called explicitly for "progressive",
+            // this._needRefresh should be set as false after `painter.refresh`,
+            // otherwise normal refresh will be tiggered consequently by some
+            // elements adding, removing or style updating.
             this._needsRefresh = false;
         },
 
         /**
          * Mark and repaint the canvas in the next frame of browser
          */
-        refresh: function() {
-            this._needsRefresh = true;
+        refresh: function () {
+            if (this._refreshMode === 'progressive') {
+                this._needsRefreshProgressive = true;
+            }
+            else {
+                this._needsRefresh = true;
+            }
         },
 
         /**

@@ -15,8 +15,6 @@
 
     var Layer = require('./Layer');
 
-    var requestAnimationFrame = require('./animation/requestAnimationFrame');
-
 
     function parseInt10(val) {
         return parseInt(val, 10);
@@ -218,71 +216,48 @@
         },
 
         /**
-         * 刷新
-         * @param {boolean} [paintAll=false] 强制绘制所有displayable
+         * Refresh view.
+         * @param {boolean|Object} [opts=false] boolean: the same as opts.paintAll.
+         *                                      Object: opts.
+         * @param {boolean} [opts.paintAll=false] Force to render all displayable.
+         * @param {Object} [opts.progressive] Only render elements with the given
+         *                                    `progressive`, which should be a Object
+         *                                    like {<progressiveKey>: number that >= 0}.
          */
-        refresh: function (paintAll) {
-
-            this._clearProgressive();
+        refresh: function (opts) {
+            !util.isObject(opts) && (opts = {paintAll: opts});
 
             var list = this.storage.getDisplayList(true);
+            var progressiveMap = opts.progressive;
 
-            var zlevelList = this._zlevelList;
+            // TBD_PROGRESSIVE
+            !progressiveMap && this._progressiveLayer && this._progressiveLayer.clear();
 
-            this._paintList(list, paintAll);
+            // Normal painting.
+            if (progressiveMap == null) {
+                var zlevelList = this._zlevelList;
 
-            // Paint custum layers
-            for (var i = 0; i < zlevelList.length; i++) {
-                var z = zlevelList[i];
-                var layer = this._layers[z];
-                if (!layer.isBuildin && layer.refresh) {
-                    layer.refresh();
+                this._paintList(list, opts.paintAll);
+
+                // Paint custum layers
+                // TBD_PROGRESSIVE
+                for (var i = 0; i < zlevelList.length; i++) {
+                    var z = zlevelList[i];
+                    var layer = this._layers[z];
+                    if (!layer.isBuildin && layer.refresh) {
+                        layer.refresh();
+                    }
                 }
             }
-
-            this._startProgessive();
+            // Progressive painting.
+            else {
+                this._doPaintList(list, false, progressiveMap);
+            }
 
             return this;
         },
 
-        _startProgessive: function () {
-            var self = this;
-
-            if (!self._furtherProgressive) {
-                return;
-            }
-
-            // Use a token to stop progress steps triggered by
-            // previous zr.refresh calling.
-            var token = self._progressiveToken = Math.random();
-
-            self._progressive++;
-            requestAnimationFrame(step);
-
-            function step() {
-                if (token === self._progressiveToken) {
-
-                    self._doPaintList(self.storage.getDisplayList());
-
-                    if (self._furtherProgressive) {
-                        self._progressive++;
-                        requestAnimationFrame(step);
-                    }
-                    else {
-                        self._progressiveToken = -1;
-                    }
-                }
-            }
-        },
-
-        _clearProgressive: function () {
-            this._progressiveToken = -1;
-            this._progressive = 0;
-            this._progressiveLayer && this._progressiveLayer.clear();
-        },
-
         _paintList: function (list, paintAll) {
-
             if (paintAll == null) {
                 paintAll = false;
             }
@@ -296,7 +271,7 @@
             this.eachBuildinLayer(postProcessLayer);
         },
 
-        _doPaintList: function (list, paintAll) {
+        _doPaintList: function (list, paintAll, progressiveMap) {
             var currentLayer;
             var currentZLevel;
             var ctx;
@@ -304,7 +279,6 @@
             // var invTransform = [];
             var scope = {prevElClipPaths: null};
 
-            this._furtherProgressive = false;
             var progressiveDone = false;
 
             for (var i = 0, l = list.length; i < l; i++) {
@@ -334,20 +308,15 @@
                     }
                 }
 
-                var elProgressive = el.progressive;
+                var progressiveFrame = el.progressiveFrame;
                 // Currently "progressive" works on the promise that all the elements
                 // with el.progressive >= 0 are adjacent to each other.
                 // progressiveDone is used as a performance guard, avoiding drawImage
                 // being called repeadedly.
-                if (!progressiveDone && elProgressive >= 0) {
-
-                    if (elProgressive > this._progressive) {
-                        this._furtherProgressive = true;
-                    }
-
+                if (progressiveMap && !progressiveDone && progressiveFrame >= 0) {
                     var progressiveLayer = this._progressiveLayer;
 
-                    if (elProgressive === this._progressive) {
+                    if (progressiveFrame === progressiveMap[el.progressiveKey]) {
                         // Do not create progressiveLayer unless required.
                         if (!progressiveLayer) {
                             progressiveLayer = this._progressiveLayer = new Layer(
@@ -363,7 +332,7 @@
                     // Considering el.progressive might be set as null or undefined
                     // or other thing by some user, !(... >= ...) is used.
                     if (progressiveLayer
-                        && (!nextEl || !(nextEl.progressive >= 0)) // jshint ignore:line
+                        && (!nextEl || !(nextEl.progressiveFrame >= 0)) // jshint ignore:line
                     ) {
                         // FIXME
                         // We dont handle the case that "progressive" are set on

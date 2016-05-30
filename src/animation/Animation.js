@@ -14,7 +14,16 @@ define(function(require) {
     var util = require('../core/util');
     var Dispatcher = require('../core/event').Dispatcher;
 
-    var requestAnimationFrame = require('./requestAnimationFrame');
+    var requestAnimationFrame = (
+        typeof window !== 'undefined' && (
+            window.requestAnimationFrame
+            || window.msRequestAnimationFrame
+            || window.mozRequestAnimationFrame
+            || window.webkitRequestAnimationFrame
+        )
+    ) || function (func) {
+        setTimeout(func, 16);
+    };
 
     var Animator = require('./Animator');
     /**
