@@ -299,7 +299,7 @@ define('zrender/core/util',['require'],function(require) {
     /**
      * @param {*} target
      * @param {*} source
-     * @param {boolen} [overlay=false]
+     * @param {boolean} [overlay=false]
      * @memberOf module:zrender/core/util
      */
     function defaults(target, source, overlay) {
@@ -456,7 +456,7 @@ define('zrender/core/util',['require'],function(require) {
         if (!(obj && cb)) {
             return;
         }
-        if (obj.reduce && obj.reduce === nativeReduce) {
+        if (obj.reduce && obj.reduce === nativeReduce) {            
             return obj.reduce(cb, memo, context);
         }
         else {
@@ -2001,9 +2001,9 @@ define('zrender/mixin/Transformable',['require','../core/matrix','../core/vector
 
     /**
      * 将自己的transform应用到context上
-     * @param {Context2D} ctx
+     * @param {CanvasRenderingContext2D} ctx
      */
-    transformableProto.setTransform = function (ctx) {
+    transformableProto.setTransform = function (ctx) {        
         var m = this.transform;
         var dpr = ctx.dpr || 1;
         if (m) {
@@ -7838,7 +7838,7 @@ define('zrender/graphic/mixin/RectText',['require','../../contain/text','../../c
 
         /**
          * Draw text in a rect with specified position.
-         * @param  {CanvasRenderingContext} ctx
+         * @param  {CanvasRenderingContext2D} ctx
          * @param  {Object} rect Displayable rect
          * @return {Object} textRect Alternative precalculated text bounding rect
          */
@@ -8113,7 +8113,7 @@ define('zrender/graphic/Displayable',['require','../core/util','./Style','../Ele
 
         /**
          * 图形绘制方法
-         * @param {Canvas2DRenderingContext} ctx
+         * @param {CanvasRenderingContext2D} ctx
          */
         // Interface
         brush: function (ctx, prevEl) {},
@@ -8508,7 +8508,7 @@ define('zrender/graphic/Image',['require','./Displayable','../core/BoundingRect'
      * @constructor
      * @param {HTMLElement} root 绘图容器
      * @param {module:zrender/Storage} storage
-     * @param {Ojbect} opts
+     * @param {Object} opts
      */
     var Painter = function (root, storage, opts) {
         // In node environment using node-canvas
@@ -9595,7 +9595,7 @@ define('zrender/zrender',['require','./core/guid','./core/env','./core/util','./
      * @constructor
      * @alias module:zrender/ZRender
      * @param {string} id
-     * @param {HTMLDomElement} dom
+     * @param {HTMLElement} dom
      * @param {Object} opts
      * @param {string} [opts.renderer='canvas'] 'canvas' or 'svg'
      * @param {number} [opts.devicePixelRatio]
@@ -11527,7 +11527,7 @@ define('zrender/core/PathProxy',['require','./curve','./vector','./bbox','./Boun
         /**
          * Rebuild path from current data
          * Rebuild path will not consider javascript implemented line dash.
-         * @param {CanvasRenderingContext} ctx
+         * @param {CanvasRenderingContext2D} ctx
          */
         rebuildPath: function (ctx) {
             var d = this.data;
@@ -13773,6 +13773,859 @@ define('zrender/graphic/shape/Polygon',['require','../helper/poly','../Path'],fu
             polyHelper.buildPath(ctx, shape, true);
         }
     });
+});
+define('zrender/svg/core',['require'],function (require) {
+	
+	var svgURI = "http://www.w3.org/2000/svg";
+	
+	return {
+		createElement: function (name) {
+			return document.createElementNS(svgURI, name);
+		}
+	};
+});
+// TODO
+// 1. shadow
+// 2. Image: sx, sy, sw, sh
+define('zrender/svg/graphic',['require','./core','../core/PathProxy','../contain/text'],function (require) {
+
+    var svgCore = require('./core');
+    var CMD = require('../core/PathProxy').CMD;
+    var textContain = require('../contain/text');
+
+    var createElement = svgCore.createElement;
+    var arrayJoin = Array.prototype.join;
+
+    var NONE = 'none';
+    var mathRound = Math.round;
+    var mathSin = Math.sin;
+    var mathCos = Math.cos;
+    var PI = Math.PI;
+    var PI2 = Math.PI * 2;
+    var degree = 180 / PI;
+
+    var EPSILON = 1e-4;
+
+    function round4(val) {
+        return mathRound(val * 1e4) / 1e4;
+    }
+
+    function isAroundZero(val) {
+        return val < EPSILON && val > -EPSILON;
+    }
+
+    function pathHasFill(style, isText) {
+        var fill = isText ? style.textFill : style.fill;
+        return fill != null && fill !== NONE;
+    }
+
+    function pathHasStroke(style, isText) {
+        var stroke = isText ? style.textStroke : style.stroke;
+        return stroke != null && stroke !== NONE;
+    }
+
+    function setTransform(svgEl, m) {
+        if (m) {
+            attr(svgEl, 'transform', 'matrix(' + arrayJoin.call(m, ',') + ')');
+        }
+    }
+
+    function attr(el, key, val) {
+        el.setAttribute(key, val);
+    }
+
+    function attrXLink(el, key, val) {
+        el.setAttributeNS('http://www.w3.org/1999/xlink', key, val);
+    }
+
+    function bindStyle(svgEl, style, isText) {
+        if (pathHasFill(style, isText)) {
+            attr(svgEl, 'fill', isText ? style.textFill : style.fill);
+            attr(svgEl, 'fill-opacity', style.opacity);
+        }
+        else {
+            attr(svgEl, 'fill', NONE);
+        }
+        if (pathHasStroke(style, isText)) {
+            attr(svgEl, 'stroke', isText ? style.textStroke : style.stroke);
+            attr(svgEl, 'stroke-width', style.lineWidth);
+            attr(svgEl, 'stroke-opacity', style.opacity);
+            var lineDash = style.lineDash;
+            if (lineDash) {
+                attr(svgEl, 'stroke-dasharray', style.lineDash.join(','));
+                attr(svgEl, 'stroke-dashoffset', mathRound(style.lineDashOffset || 0));
+            }
+            else {
+                attr(svgEl, 'stroke-dasharray', '');
+            }
+
+            // PENDING
+            style.lineCap && attr(svgEl, 'stroke-linecap', style.lineCap);
+            style.lineJoin && attr(svgEl, 'stroke-linejoin', style.lineJoin);
+            style.miterLimit && attr(svgEl, 'stroke-miterlimit', style.miterLimit);
+        }
+        else {
+            attr(svgEl, 'stroke', NONE);
+        }
+    }
+
+    /***************************************************
+     * PATH
+     **************************************************/
+    function pathDataToString(data) {
+        var str = [];
+        for (var i = 0; i < data.length;) {
+            var cmd = data[i++];
+            var cmdStr = '';
+            var nData = 0;
+            switch (cmd) {
+                case CMD.M:
+                    cmdStr = 'M';
+                    nData = 2;
+                    break;
+                case CMD.L:
+                    cmdStr = 'L';
+                    nData = 2;
+                    break;
+                case CMD.Q:
+                    cmdStr = 'Q';
+                    nData = 4;
+                    break;
+                case CMD.C:
+                    cmdStr = 'C';
+                    nData = 6;
+                    break;
+                case CMD.A:
+                    var cx = data[i++];
+                    var cy = data[i++];
+                    var rx = data[i++];
+                    var ry = data[i++];
+                    var theta = data[i++];
+                    var dTheta = data[i++];
+                    var psi = data[i++];
+                    var clockwise = data[i++];
+                    var sign = clockwise ? 1 : -1;
+
+                    var dThetaPositive = Math.abs(dTheta);
+                    var isCircle = isAroundZero(dThetaPositive - PI2) || isAroundZero(dThetaPositive % PI2);
+                    var large = dThetaPositive > PI;
+
+                    var x0 = round4(cx + rx * mathCos(theta));
+                    var y0 = round4(cy + ry * mathSin(theta) * sign);
+
+                    // It will not draw if start point and end point are exactly the same
+                    // We need to shift the end point with a small value
+                    // FIXME A better way to draw circle ?
+                    if (isCircle) {
+                        dTheta = PI2 - 1e-4;
+                        clockwise = false;
+                        sign = -1;
+                    }
+
+                    var x = round4(cx + rx * mathCos(theta + dTheta));
+                    var y = round4(cy + ry * mathSin(theta + dTheta) * sign);
+
+                    // FIXME Ellipse
+                    str.push('A', round4(rx), round4(ry), mathRound((psi + theta) * degree), +large, +clockwise, x, y);
+                    break;
+                case CMD.Z:
+                    cmdStr = 'Z';
+                    break;
+                case CMD.R:
+                    var x = round4(data[i++]);
+                    var y = round4(data[i++]);
+                    var w = round4(data[i++]);
+                    var h = round4(data[i++]);
+                    str.push(
+                        'M', x, y,
+                        'L', x + w, y,
+                        'L', x + w, y + h,
+                        'L', x, y + h,
+                        'L', x, y
+                    );
+                    break;
+            }
+            cmdStr && str.push(cmdStr);
+            for (var j = 0; j < nData; j++) {
+                // PENDING With scale
+                str.push(round4(data[i++]));
+            }
+        }
+        return str.join(' ');
+    }
+
+    var svgPath = {};
+
+    svgPath.brush = function (el) {
+        var style = el.style;
+
+        var svgEl = el.__svgEl;
+        if (!svgEl) {
+            svgEl = createElement('path');
+            el.__svgEl = svgEl;
+        }
+
+        if (!el.path) {
+            el.createPathProxy();
+        }
+        var path = el.path;
+
+        if (el.__dirtyPath) {
+            path.beginPath();
+            el.buildPath(path, el.shape);
+            el.__dirtyPath = false;
+
+            attr(svgEl, 'd', pathDataToString(path.data));
+        }
+
+        bindStyle(svgEl, style);
+        setTransform(svgEl, el.transform);
+
+        if (style.text != null) {
+            svgTextDrawRectText(el, el.getBoundingRect());
+        }
+    };
+
+    /***************************************************
+     * IMAGE
+     **************************************************/
+    var svgImage = {}
+
+    svgImage.brush = function (el) {
+        var style = el.style;
+        var image = style.image;
+
+        if (image instanceof HTMLImageElement) {
+            var src = image.src;
+            image = src;
+        }
+        if (! image) {
+            return;
+        }
+
+        var x = style.x || 0;
+        var y = style.y || 0;
+
+        var dw = style.width;
+        var dh = style.height;
+
+        var svgEl = el.__svgEl;
+        if (! svgEl) {
+            svgEl = createElement('image');
+            el.__svgEl = svgEl;
+        }
+
+        if (image !== el.__imageSrc) {
+            attrXLink(svgEl, 'href', image);
+            // Caching image src
+            el.__imageSrc = image;
+        }
+
+        attr(svgEl, 'width', dw);
+        attr(svgEl, 'height', dh);
+
+        attr(svgEl, 'x', x);
+        attr(svgEl, 'y', y);
+
+        setTransform(svgEl, el.transform);
+
+        if (style.text != null) {
+            svgTextDrawRectText(el, el.getBoundingRect());
+        }
+    };
+
+    /***************************************************
+     * TEXT
+     **************************************************/
+    var svgText = {};
+
+    var svgTextDrawRectText = function (el, rect, textRect) {
+        var style = el.style;
+        var text = style.text;
+        // Convert to string
+        text != null && (text += '');
+        if (!text) {
+            return;
+        }
+
+        var textSvgEl = el.__textSvgEl;
+        if (! textSvgEl) {
+            textSvgEl = createElement('text');
+            el.__textSvgEl = textSvgEl;
+        }
+
+        bindStyle(textSvgEl, style, true);
+        setTransform(textSvgEl, el.transform);
+
+        var x;
+        var y;
+        var textPosition = style.textPosition;
+        var distance = style.textDistance;
+        var align = style.textAlign;
+        // Default font
+        var font = style.textFont || '12px sans-serif';
+        var baseline = style.textBaseline;
+
+        textRect = textRect || textContain.getBoundingRect(text, font, align, baseline);
+
+        var lineHeight = textRect.lineHeight;
+        // Text position represented by coord
+        if (textPosition instanceof Array) {
+            x = rect.x + textPosition[0];
+            y = rect.y + textPosition[1];
+        }
+        else {
+            var newPos = textContain.adjustTextPositionOnRect(
+                textPosition, rect, textRect, distance
+            );
+            x = newPos.x;
+            y = newPos.y;
+
+            align = 'left';
+        }
+
+        if (font) {
+            textSvgEl.style.font = font;
+        }
+
+        // Make baseline top
+        attr(textSvgEl, 'x', x);
+        attr(textSvgEl, 'y', y);
+
+        var textLines = text.split('\n');
+        var nTextLines = textLines.length;
+        var textAnchor = align;
+        // PENDING
+        if (textAnchor === 'left')  {
+            textAnchor = 'start';
+        }
+        else if (textAnchor === 'right') {
+            textAnchor = 'end';
+        }
+        else if (textAnchor === 'center') {
+            textAnchor = 'middle';
+        }
+        // Font may affect position of each tspan elements
+        if (el.__text !== text || el.__textFont !== font) {
+            var tspanList = el.__tspanList || [];
+            el.__tspanList = tspanList;
+            for (var i = 0; i < nTextLines; i++) {
+                // Using cached tspan elements
+                var tspan = tspanList[i];
+                if (! tspan) {
+                    tspan = tspanList[i] = createElement('tspan');
+                    textSvgEl.appendChild(tspan);
+                    attr(tspan, 'alignment-baseline', 'hanging');
+                    attr(tspan, 'text-anchor', textAnchor);
+                }
+                attr(tspan, 'x', x);
+                attr(tspan, 'y', y + i * lineHeight);
+                tspan.appendChild(document.createTextNode(textLines[i]));
+            }
+            // Remove unsed tspan elements
+            for (; i < tspanList.length; i++) {
+                textSvgEl.removeChild(tspanList[i]);
+            }
+            tspanList.length = nTextLines;
+
+            el.__text = text;
+            el.__textFont = font;
+        }
+    };
+
+    svgText.drawRectText = svgTextDrawRectText;
+
+    svgText.brush = function (el) {
+        var style = el.style;
+        if (style.text != null) {
+            // 强制设置 textPosition
+            style.textPosition = [0, 0];
+            svgTextDrawRectText(el, {
+                x: style.x || 0, y: style.y || 0,
+                width: 0, height: 0
+            }, el.getBoundingRect());
+        }
+    };
+
+    return {
+        path: svgPath,
+        image: svgImage,
+        text: svgText
+    };
+});
+// Hirschberg's algorithm
+// http://en.wikipedia.org/wiki/Hirschberg%27s_algorithm
+
+/**
+ * @module zrender/core/arrayDiff
+ * @author Yi Shen
+ */
+define('zrender/core/arrayDiff',['require'],function (require) {
+
+    function defaultCompareFunc(a, b) {
+        return a === b;
+    }
+
+    function createItem(cmd, idx, idx1) {
+        var res = {
+            // cmd explanation
+            // '=': not change
+            // '^': replace with a new item in second array. Unused temporary
+            // '+': add a new item of second array
+            // '-': del item in first array
+            cmd: cmd,
+            // Value index, use index in the first array
+            // Except '+'. Adding a new item needs value in the second array
+            idx: idx
+        };
+        // Replace need to know both two indices
+        // if (cmd === '^') {
+        //     res.idx1 = idx1;
+        // }
+
+        if (cmd === '=') {
+            res.idx1 = idx1;
+        }
+        return res;
+    }
+
+    function append(out, cmd, idx, idx1) {
+        out.push(createItem(cmd, idx, idx1));
+    }
+
+    var abs = Math.abs;
+    // Needleman-Wunsch score
+    function score(arr0, arr1, i0, i1, j0, j1, equal, memo) {
+        var last;
+        var invM = i0 > i1;
+        var invN = j0 > j1;
+        var m = abs(i1 - i0);
+        var n = abs(j1 - j0);
+        var i;
+        var j;
+        for (i = 0; i <= m; i++) {
+            for (j = 0; j <= n; j++) {
+                if (i === 0) {
+                    memo[j] = j;
+                }
+                else if (j === 0) {
+                    last = memo[j];
+                    memo[j] = i;
+                }
+                else {
+                    // memo[i-1][j-1] + same(arr0[i-1], arr1[j-1]) ? 0 : 1
+                    // Retained or replace
+                    var val0 = arr0[invM ? (i0 - i) : (i - 1 + i0)];
+                    var val1 = arr1[invN ? (j0 - j) : (j - 1 + j0)];
+                    // Because replace is add after remove actually
+                    // It has a higher score than removing or adding
+                    // TODO custom score function
+                    var score0 = last + (equal(val0, val1) ? 0 : 2);
+                    // memo[i-1][j] + 1
+                    // Remove arr0[i-1]
+                    var score1 = memo[j] + 1;
+                    // memo[i][j-1] + 1
+                    // Add arr1[j-1]
+                    var score2 = memo[j - 1] + 1;
+
+                    last = memo[j];
+                    memo[j] = score0 < score1 ? score0 : score1;
+                    score2 < memo[j] && (memo[j] = score2);
+                    // Math min of three parameters seems slow
+                    // memo[j] = Math.min(score0, score1, score2);
+                }
+            }
+        }
+
+        return memo;
+    }
+
+    function hirschberg(arr0, arr1, i0, i1, j0, j1, equal, score0, score1) {
+        var out = [];
+        var len0 = i1 - i0;
+        var len1 = j1 - j0;
+        var i;
+        var j;
+        if (! len0) {
+            for (j = 0; j < len1; j++) {
+                append(out, '+', j + j0);
+            }
+        }
+        else if (! len1) {
+            for (i = 0; i < len0; i++) {
+                append(out, '-', i + i0);
+            }
+        }
+        else if (len0 === 1) {
+            var a = arr0[i0];
+            var matched = false;
+            for (j = 0; j < len1; j++) {
+                if (equal(a, arr1[j + j0]) && ! matched) {
+                    matched = true;
+                    // Equal and update use the index in first array
+                    append(out, '=', i0, j + j0);
+                }
+                else {
+                    // if (j === len1 - 1 && ! matched) {
+                    //     append(out, '^', i0, j + j0);
+                    // }
+                    // else {
+                    append(out, '+', j + j0);
+                    // }
+                }
+            }
+            if (! matched) {
+                append(out, '-', i0);
+            }
+        }
+        else if (len1 === 1) {
+            var b = arr1[j0];
+            var matched = false;
+            for (i = 0; i < len0; i++) {
+                if (equal(b, arr0[i + i0]) && ! matched) {
+                    matched = true;
+                    append(out, '=', i + i0, j0);
+                }
+                else {
+                    // if (i === len0 - 1 && ! matched) {
+                    //     append(out, '^', i + i0, j0);
+                    // }
+                    // else {
+                    append(out, '-', i + i0);
+                    // }
+                }
+            }
+            if (! matched) {
+                append(out, '+', j0);
+            }
+        }
+        else {
+            var imid = ((len0 / 2) | 0) + i0;
+
+            score(arr0, arr1, i0, imid, j0, j1, equal, score0);
+            score(arr0, arr1, i1, imid + 1, j1, j0, equal, score1);
+
+            var min = Infinity;
+            var jmid = 0;
+            var sum;
+            for (j = 0; j <= len1; j++) {
+                sum = score0[j] + score1[len1 - j];
+                if (sum < min) {
+                    min = sum;
+                    jmid = j;
+                }
+            }
+            jmid += j0;
+
+            out = hirschberg(arr0, arr1, i0, imid, j0, jmid, equal, score0, score1);
+            var out1 = hirschberg(arr0, arr1, imid, i1, jmid, j1, equal, score0, score1);
+            // Concat
+            for (i = 0; i < out1.length; i++) {
+                out.push(out1[i]);
+            }
+        }
+        return out;
+    }
+
+    function arrayDiff(arr0, arr1, equal) {
+        equal = equal || defaultCompareFunc;
+        // Remove the common head and tail
+        var i;
+        var j;
+        var len0 = arr0.length;
+        var len1 = arr1.length;
+        var lenMin = Math.min(len0, len1);
+        var head = [];
+        for (i = 0; i < lenMin; i++) {
+            if (! equal(arr0[i], arr1[i])) {
+                break;
+            }
+            append(head, '=', i, i);
+        }
+
+        for (j = 0; j < lenMin; j++) {
+            if (! equal(arr0[len0 - j - 1], arr1[len1 - j - 1])) {
+                break;
+            }
+        }
+
+        if (len0 - j >= i || len1 - j >= i) {
+            var middle = hirschberg(arr0, arr1, i, len0 - j, i, len1 - j, equal, [], []);
+            for (i = 0; i < middle.length; i++) {
+                head.push(middle[i]);
+            }
+            for (i = 0; i < j; i++) {
+                append(head, '=', len0 - j + i, len1 - j + i);
+            }
+        }
+        return head;
+    }
+
+    return arrayDiff;
+});
+/**
+ * SVG Painter
+ * @module zrender/svg/Painter
+ */
+
+define('zrender/svg/Painter',['require','./core','../core/log','../graphic/Path','../graphic/Image','../graphic/Text','../core/arrayDiff','./graphic'],function (require) {
+    var svgCore = require('./core');
+    var zrLog = require('../core/log');
+    var Path = require('../graphic/Path');
+    var ZImage = require('../graphic/Image');
+    var ZText = require('../graphic/Text');
+    var arrayDiff = require('../core/arrayDiff');
+
+    var svgGraphic = require('./graphic');
+    var svgPath = svgGraphic.path;
+    var svgImage = svgGraphic.image;
+    var svgText = svgGraphic.text;
+
+    var createElement = svgCore.createElement;
+
+    function parseInt10(val) {
+        return parseInt(val, 10);
+    }
+
+    function getSvgProxy(el) {
+        if (el instanceof Path) {
+            return svgPath;
+        }
+        else if (el instanceof ZImage) {
+            return svgImage;
+        }
+        else if (el instanceof ZText) {
+            return svgText;
+        }
+    }
+
+    function checkParentAvailable(parent, child) {
+        return child && parent && child.parentNode !== parent;
+    }
+
+    function insertAfter(parent, child, prevSibling) {
+        if (checkParentAvailable(parent, child) && prevSibling) {
+            var nextSibling = prevSibling.nextSibling;
+            nextSibling ? parent.insertBefore(child, nextSibling)
+                : parent.appendChild(child);
+        }
+    }
+
+    function prepend(parent, child) {
+        if (checkParentAvailable(parent, child)) {
+            var firstChild = parent.firstChild;
+            firstChild ? parent.insertBefore(child, firstChild)
+                : parent.appendChild(child);
+        }
+    }
+
+    function append(parent, child) {
+        if (checkParentAvailable(parent, child)) {
+            parent.appendChild(child);
+        }
+    }
+
+    function remove(parent, child) {
+        if (child && parent && child.parentNode === parent) {
+            parent.removeChild(child);
+        }
+    }
+
+    function getTextSvgElement(displayable) {
+        return displayable.__textSvgEl;
+    }
+
+    function getSvgElement(displayable) {
+        return displayable.__svgEl;
+    }
+
+    /**
+     * @alias module:zrender/svg/Painter
+     */
+    var SVGPainter = function (root, storage) {
+
+        this.root = root;
+
+        this.storage = storage;
+
+        var svgRoot = createElement('svg');
+
+        var viewport = document.createElement('div');
+        viewport.style.cssText = 'overflow: hidden;';
+
+        this._svgRoot = svgRoot;
+        this._viewport = viewport;
+
+        root.appendChild(viewport);
+        viewport.appendChild(svgRoot);
+
+        this.resize();
+
+        this._visibleList = [];
+    };
+
+    SVGPainter.prototype = {
+
+        constructor: SVGPainter,
+
+        getViewportRoot: function () {
+            return this._viewport;
+        },
+
+        refresh: function () {
+
+            var list = this.storage.getDisplayList(true);
+
+            this._paintList(list);
+        },
+
+        _paintList: function (list) {
+            var svgRoot = this._svgRoot;
+            var visibleList = this._visibleList;
+            var listLen = list.length;
+
+            var newVisibleList = [];
+            var i;
+            for (i = 0; i < listLen; i++) {
+                var displayable = list[i];
+                var svgProxy = getSvgProxy(displayable);
+                if (!displayable.invisible) {
+                    if (displayable.__dirty) {
+                        svgProxy && svgProxy.brush(displayable);
+                        displayable.__dirty = false;
+                    }
+                    newVisibleList.push(displayable);
+                }
+            }
+
+            var diff = arrayDiff(visibleList, newVisibleList);
+            var prevSvgElement;
+
+            // First do remove, in case element moved to the head and do remove after add
+            for (i = 0; i < diff.length; i++) {
+                var item = diff[i];
+                if (item.cmd === '-') {
+                    var displayable = visibleList[item.idx];
+                    var svgElement = getSvgElement(displayable);
+                    var textSvgElement = getTextSvgElement(displayable);
+                    remove(svgRoot, svgElement);
+                    remove(svgRoot, textSvgElement);
+                }
+            }
+            for (i = 0; i < diff.length; i++) {
+                var item = diff[i];
+                switch (item.cmd) {
+                    case '=':
+                        var displayable = visibleList[item.idx];
+                        prevSvgElement = getTextSvgElement(displayable) || getSvgElement(displayable);
+                        break;
+                    case '+':
+                        var displayable = newVisibleList[item.idx];
+                        var svgElement = getSvgElement(displayable);
+                        var textSvgElement = getTextSvgElement(displayable);
+                        prevSvgElement ? insertAfter(svgRoot, svgElement, prevSvgElement)
+                            : prepend(svgRoot, svgElement);
+                        if (svgElement) {
+                            insertAfter(svgRoot, textSvgElement, svgElement);
+                        }
+                        else if (prevSvgElement) {
+                            insertAfter(svgRoot, textSvgElement, prevSvgElement);
+                        }
+                        else {
+                            prepend(svgRoot, textSvgElement);
+                        }
+                        // Insert text
+                        insertAfter(svgRoot, textSvgElement, svgElement);
+                        prevSvgElement = textSvgElement || svgElement;
+                        break;
+                    // case '^':
+                        // var displayable = visibleList[item.idx];
+                        // var svgElement = getSvgElement(displayable);
+                        // prevSvgElement ? insertAfter(svgRoot, svgElement, prevSvgElement)
+                        //     : prepend(svgRoot, svgElement);
+                        // break;
+                }
+            }
+
+            this._visibleList = newVisibleList;
+        },
+
+        resize: function () {
+            var width = this._getWidth();
+            var height = this._getHeight();
+
+            if (this._width !== width && this._height !== height) {
+                this._width = width;
+                this._height = height;
+
+                var viewportStyle = this._viewport.style;
+                viewportStyle.width = width + 'px';
+                viewportStyle.height = height + 'px';
+
+                var svgRoot = this._svgRoot;
+                // Set width by 'svgRoot.width = width' is invalid
+                svgRoot.setAttribute('width', width);
+                svgRoot.setAttribute('height', height);
+            }
+        },
+
+        getWidth: function () {
+            return this._getWidth();
+        },
+
+        getHeight: function () {
+            return this._getHeight();
+        },
+
+        _getWidth: function () {
+            var root = this.root;
+            var stl = document.defaultView.getComputedStyle(root);
+
+            return ((root.clientWidth || parseInt10(stl.width))
+                    - parseInt10(stl.paddingLeft)
+                    - parseInt10(stl.paddingRight)) | 0;
+        },
+
+        _getHeight: function () {
+            var root = this.root;
+            var stl = document.defaultView.getComputedStyle(root);
+
+            return ((root.clientHeight || parseInt10(stl.height))
+                    - parseInt10(stl.paddingTop)
+                    - parseInt10(stl.paddingBottom)) | 0;
+        },
+
+        dispose: function () {
+            this.root.innerHTML = '';
+
+            this._svgRoot =
+            this._viewport =
+            this.storage = null;
+        }
+    }
+
+    // Not supported methods
+    function createMethodNotSupport(method) {
+        return function () {
+            zrLog('In SVG mode painter not support method "' + method + '"')
+        }
+    }
+
+    var notSupportedMethods = [
+        'getLayer', 'insertLayer', 'eachLayer', 'eachBuiltinLayer', 'eachOtherLayer', 'getLayers',
+        'modLayer', 'delLayer', 'clearLayer', 'toDataURL', 'pathToImage'
+    ];
+
+    for (var i = 0; i < notSupportedMethods.length; i++) {
+        var name = notSupportedMethods[i];
+        SVGPainter.prototype[name] = createMethodNotSupport(name);
+    }
+
+    return SVGPainter;
+});
+define('zrender/svg/svg',['require','./graphic','../zrender','./Painter'],function (require) {
+    require('./graphic');
+    require('../zrender').registerPainter('svg', require('./Painter'));
 });
 define('zrender/graphic/Gradient',['require'],function (require) {
 

@@ -29,6 +29,7 @@
         'zrender/graphic/shape/Polyline',
         'zrender/graphic/shape/Polygon',
         'zrender/container/Group',
+        'zrender/svg/svg',
         'zrender/vml/vml'
     ],
     out: 'zrender.js'
